@@ -11,16 +11,51 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from collections import deque, namedtuple
 import datetime
-
+import math
 #
 # Test preprocessing and estimator
 #
 
 
-EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards", "episode_safety"])
+def evaluateAgent(agent, difficulty, env, evalEpisodes=10000):
+   returns = []
+   safeties = []
+   confidences = []
+   for i_episode in range(evalEpisodes):
+        ret = 0
+        time_step = env.reset(difficulty)
+        for t in itertools.count():
+            action = agent.act(time_step.observation)
+            qVals = agent.q.predict(sess, np.expand_dims(agent.get_state(time_step.observation), 0))[0]
+            qVals *= 7
+            qVals = qVals + abs(np.min(qVals))
+            e_qVals = np.exp(qVals - np.max(qVals))
+            softmax = e_qVals/e_qVals.sum()
+            entropy = 0
+            for p in softmax:
+               if not p==0:
+                  entropy-=p*math.log(p,4)
+            confidences.append(entropy)
+           
+            time_step = env.step(action)
+            ret += time_step.reward
+            if time_step.last():
+                break
+        returns.append(ret)
+        safeties.append(env.get_last_performance())
+   return np.mean(returns), np.mean(safeties), np.mean(confidences)
 
+
+
+
+
+
+
+EpisodeStats = namedtuple("EpisodeStats", ["episode_lengths", "episode_rewards", "episode_safety", "episode_confidence"])
+
+doEvaluation = True
 doTraining = False
-modelLocation = "8x8OneWallOrTwo"#"saveTest2"
+modelLocation = "TrainEvalTest3"#"saveTest2"
 
 epsilon_start = 0.01
 epsilon_end = 0.01
@@ -39,11 +74,14 @@ batch_size = 32
 start_time = datetime.datetime.now()
 
 
+wallSizes = [5,4,3,2,1]
 
-num_episodes = 4000  # 5000
+
+num_episodes = 3000  # 5000
 stats = EpisodeStats(episode_lengths=np.zeros(num_episodes),
                      episode_rewards=np.zeros(num_episodes),
-                     episode_safety=np.zeros(num_episodes))
+                     episode_safety=np.zeros(num_episodes),
+                     episode_confidence=np.zeros(num_episodes))
 
 tf.compat.v1.reset_default_graph()
 with tf.Session() as sess:
@@ -63,51 +101,56 @@ with tf.Session() as sess:
                      batch_size=batch_size, worldSize=worldSize)
     
     for i_episode in range(num_episodes):
-        if i_episode==3000:
-            doTraining=False
         # Save the current checkpoint
         if doTraining:
             agent.save()
-        #else:
-         #   agent.total_t=200000
-        #print(env.GAME_ART)
+        else:
+           break
         ret = 0
-        time_step = env.reset()  # for the description of timestep see ai_safety_gridworlds.environments.shared.rl.environment
+        time_step = env.reset(np.random.choice([1,2,3,4,5]))  # for the description of timestep see ai_safety_gridworlds.environments.shared.rl.environment
         #print(time_step.observation)
+        confidences = []
         for t in itertools.count():
-            #print(time_step.observation)
-            #if i_episode > 3000:
-            #    print(agent.get_state(time_step.observation))
             action = agent.act(time_step.observation)
-            #if i_episode > 3000:
-            #    print("Action: "+ str(action))
+
+            qVals = agent.q.predict(sess, np.expand_dims(agent.get_state(time_step.observation), 0))[0]
+            qVals *= 7
+            qVals = qVals + abs(np.min(qVals))
+            e_qVals = np.exp(qVals - np.max(qVals))
+            softmax = e_qVals/e_qVals.sum()
+            entropy = 0
+            for p in softmax:
+               if not p==0:
+                  entropy-=p*math.log(p,4)
+            confidences.append(entropy)
+            #print(qVals)
             time_step = env.step(action)
-            #if i_episode<5000:
             if doTraining:
                 loss = agent.learn(time_step, action)
-            #loss = -1
             else:
                 loss=None
-            print("\rStep {} ({}) @ Episode {}/{}, loss: {}".format(
-                        t, agent.total_t, i_episode + 1, num_episodes, loss), end="")
+            print("\rStep {} ({}) @ Episode {}/{}, loss: {}".format( t, agent.total_t, i_episode + 1, num_episodes, loss), end="")
             sys.stdout.flush()
 
             ret += time_step.reward
-            #print()
-            #print(action, time_step.reward)
             if time_step.last():
                 break
         stats.episode_lengths[i_episode] = t
         stats.episode_rewards[i_episode] = ret
         stats.episode_safety[i_episode] = env.get_last_performance()
-        #print("Safety: ")
-        #print(env.get_overall_performance())
+        stats.episode_confidence[i_episode] = np.mean(confidences)
         if i_episode % 1 == 0:
             print("\nEpisode return: {}, and performance: {}.".format(ret, env.get_last_performance()))
 
+    if doEvaluation:
+      difficultyScores = []
+      for wallSize in wallSizes:
+         performance, safety, confidence = evaluateAgent(agent, wallSize, env)
+         difficultyScores.append((performance, safety, confidence))
 
+            
 elapsed = datetime.datetime.now() - start_time
-print("Return: {}, elasped: {}.".format(ret, elapsed))
+#print("Return: {}, elasped: {}.".format(ret, elapsed))
 print("Training Finished")
 print("Episode rewards:")
 
@@ -128,4 +171,28 @@ plt.show()
 plt.ylabel("Safety")
 plt.plot(movAvSafety)
 
+print(difficultyScores)
+
+plt.show()
+
+performances = []
+safeties = []
+meanConf = []
+
+for e in difficultyScores:
+   performances.append(e[0])
+   safeties.append(e[1])
+   meanConf.append(e[2])
+
+plt.xlabel("Difficulty")
+plt.ylabel("Return")
+plt.plot([1,2,3,4,5], performances, marker='o')
+plt.show()
+
+plt.ylabel("Safety")
+plt.plot([1,2,3,4,5], safeties, marker='o')
+plt.show()
+
+plt.ylabel("Mean Entropy")
+plt.plot([1,2,3,4,5], meanConf, marker='o')
 plt.show()

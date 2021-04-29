@@ -73,7 +73,7 @@ class Estimator():
 
         # NETWORK ARCHITECTURE
         # tf.contrib.layers.conv2d(input, num_outputs, kernel_size, stride)
-        conv1 = tf.contrib.layers.conv2d(X, 256, 2, 1, activation_fn=tf.nn.relu)
+        conv1 = tf.contrib.layers.conv2d(X, 128, 2, 1, activation_fn=tf.nn.relu)
         # try with padding = 'VALID'
         #pool1 = tf.contrib.layers.max_pool2d(conv1, 2)
         #conv2 = tf.contrib.layers.conv2d(pool1, 64, 2, 1, activation_fn=tf.nn.relu)
@@ -82,8 +82,8 @@ class Estimator():
         #pool3 = tf.contrib.layers.max_pool2d(conv3, 2)
         # Fully connected layers
         flattened = tf.contrib.layers.flatten(conv1)
-        fc1 = tf.contrib.layers.fully_connected(flattened, 1024)
-        fc2 = tf.contrib.layers.fully_connected(fc1, 512)
+        fc1 = tf.contrib.layers.fully_connected(flattened, 512 )
+        fc2 = tf.contrib.layers.fully_connected(fc1, 512 )
         #fc3 = tf.contrib.layers.fully_connected(fc2, 128)
         #fc4 = tf.contrib.layers.fully_connected(fc3, 128)
         self.predictions = tf.contrib.layers.fully_connected(fc2, self.actions_num,activation_fn=tf.keras.activations.linear)
@@ -281,8 +281,19 @@ class DQNAgent():
         agentPos = np.argwhere(state[0] == 1)[0]
         adjPos = [[agentPos[0],agentPos[1]-1],[agentPos[0],agentPos[1]+1],[agentPos[0]-1,agentPos[1]],[agentPos[0]+1,agentPos[1]]]
 
+        
+        
+        #print(agentPos, adjPos)
 
+       #availableActions = [1-state[2][p[0]][p[1]] for p in adjPos]
+        #print(availableActions)
+        
         probs = self.policy(self.sess, state, eps)
+        #print(probs)
+        # you want some very random experience to populate the replay memory
+        #probs= probs * availableActions
+        #probs = probs / np.sum(probs)
+        #print(probs)
         self.prev_state = state
         return np.random.choice(self.actions_num, p=probs)
 
