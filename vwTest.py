@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 
 
 from stable_baselines.common.tf_layers import conv, linear, conv_to_fc
+from sklearn.linear_model import SGDClassifier
 
 
 
@@ -34,9 +35,12 @@ overWriteModels=True
 ppoModelLocation = "ppoModel"
 dqnModelLocation= "dqnModel"
 
+
+
+
 difficultySizes = [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]
 
-def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], entropyThreshold=1):
+def evaluatePolicy(env, model=None, numberOfEpisodes=10, difficulties=[-1], entropyThreshold=1, classifier=None, activateWrapper=False):
 	difficultyRewards = []
 	difficultySafeties = []
 	difficultyRewardsSDs = []
@@ -47,6 +51,8 @@ def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], en
 	difficultyConfidencesSD = []
 	difficultyExploration = []
 	difficultyExplorationSD = []
+	difficultyExpectedSuccess = []
+	difficultyExpectedSuccessSD = []
 
 	for d in difficulties:
 
@@ -55,14 +61,25 @@ def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], en
 		episodeSuccess = []
 		episodeConfidences = []
 		episodeExploration = []
+		episodeExpectedSuccess = []
 		for ep in range(0, numberOfEpisodes):
 			episodeReward = 0
 			done = False
 			obs=env.reset(difficulty=d)
+			#if not model == None and activateWrapper:
+			#	doWeContinue = classifier.predict_proba(obs.reshape(1,-1))[0][1]
+			#else:
+			#	doWeContinue=1
+
 			confidence = []
 			print(d)
 			exploredCells = np.zeros((difficultySizes[d-1]+2,difficultySizes[d-1]+2))
 			exploredCells[obs[0]][obs[1]] =1
+			#print(doWeContinue)
+		#	if doWeContinue < 0.2:
+		#		episodeReward=-50
+		#		done=True
+
 			while not done:
 				if not model == None:
 					#entropy=0
@@ -74,9 +91,18 @@ def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], en
 					#		entropy -= p*math.log(p, 4)
 					#confidence.append(entropy)
 					action, states = model.predict(obs)
+					if activateWrapper:
+						doWeContinue = classifier.predict_proba(obs.reshape(1,-1))[0][1]
+					else:
+						doWeContinue=1
 				else:
 					action = env.action_space.sample()
+					doWeContinue=1
 					#confidence.append(1)
+				if doWeContinue < 0.2:
+					done=True
+					episodeReward=-50
+					break
 				obs, reward, done, info = env.step(action)
 				exploredCells[obs[0]][obs[1]]=1
 				episodeReward+=reward
@@ -91,9 +117,9 @@ def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], en
 			episodeExploration.append(np.count_nonzero(exploredCells)/(difficultySizes[d-1]*difficultySizes[d-1]))
 			#print(exploredCells)
 		print(episodeRewards, episodeSafeties)
-		if not model == None:
+		if not model == None: #not model == None:
 			print("DOING ENTROPY")
-			for i in range(0,100000):
+			for i in range(0,10):
 
 				obs=env.reset(difficulty=d)
 				entropy=0
@@ -103,7 +129,15 @@ def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], en
 					if not p==0:
 						entropy -= p*math.log(p, 4)
 				episodeConfidences.append(entropy)
-				print(entropy)
+				#print(entropy)
+				#print("prob is:")
+				#print(classifier.predict_proba(obs.reshape(1,-1)))
+				#print("prediction is")
+				#print(classifier.predict(obs.reshape(1,-1)))
+				#print(" ")
+
+
+				episodeExpectedSuccess.append(classifier.predict_proba(obs.reshape(1,-1))[0][1])
 		else:
 			episodeConfidences.append(1)
 
@@ -117,12 +151,35 @@ def evaluatePolicy(env, model=None, numberOfEpisodes=1000, difficulties=[-1], en
 		difficultyConfidencesSD.append(np.std(episodeConfidences))
 		difficultyExploration.append(np.mean(episodeExploration))
 		difficultyExplorationSD.append(np.std(episodeExploration))
-	return np.array(difficultyRewards), np.array(difficultySafeties), np.array(difficultySuccesses), np.array(difficultyConfidences), np.array(difficultyExploration), np.array(difficultyRewardsSDs), np.array(difficultySafetiesSDs), np.array(difficultySuccessesSDs), np.array(difficultyConfidencesSD), np.array(difficultyExplorationSD)
+		difficultyExpectedSuccess.append(np.mean(episodeExpectedSuccess))
+		difficultyExpectedSuccessSD.append(np.std(episodeExpectedSuccess))
+	return np.array(difficultyRewards), np.array(difficultySafeties), np.array(difficultySuccesses), np.array(difficultyConfidences), np.array(difficultyExploration), np.array(difficultyExpectedSuccess), np.array(difficultyRewardsSDs), np.array(difficultySafetiesSDs), np.array(difficultySuccessesSDs), np.array(difficultyConfidencesSD), np.array(difficultyExplorationSD), np.array(difficultyExpectedSuccessSD)
 
 
 
+def interTrain(env, model=None, numberOfEpisodes=25, difficulties=[-1]):
 
 
+	clf = SGDClassifier(loss='log')
+	for ep in range(0, numberOfEpisodes):
+		episodeReward = 0
+		done=False
+		episodeDifficulty=np.random.choice(difficulties)
+		obs=env.reset(difficulty=episodeDifficulty)
+		trajectory = []
+		while not done:
+			if not model == None:
+				action, states=model.predict(obs)
+			else:
+				action=env.action_space.sample()
+			obs, reward, done, info = env.step(action)
+			episodeReward+=reward
+			trajectory.append(obs)
+		success = episodeReward > -50
+		X = np.array(trajectory)
+		Y = np.array([success for i in range(0, len(X))])
+		clf.partial_fit(X, Y, np.array([0,1]))
+	return clf
 
 class CustomDQNPolicy(FeedForwardPolicy):
 	def __init__(self, *args, **kwargs):
@@ -232,6 +289,7 @@ wallSize=[13,12,11,10,9,8,7,6,5,4,3,2,1]
 if doEval:
 	if not doTraining:
 
+
 		with open('/home/john/ai-safety-gridworlds/logs/dqnparamsPreload.csv', 'w') as csvFile:
 				csvWriter = csv.writer(csvFile)
 				params = dqnModel.get_parameters()
@@ -258,10 +316,17 @@ if doEval:
 			csvWriter.writerow(params)
 			csvWriter.writerow(params.items())
 
-	ppoRewardEval, ppoSafetyEval, ppoSuccessEval, ppoConfidenceEval, ppoExpEval, ppoRewardEvalSD, ppoSafetyEvalSD, ppoSuccessEvalSD, ppoConfidenceEvalSD, ppoExpEvalSD = evaluatePolicy(env, ppoModel, difficulties=wallSize)
-	dqnRewardEval, dqnSafetyEval, dqnSuccessEval, dqnConfidenceEval, dqnExpEval, dqnRewardEvalSD, dqnSafetyEvalSD, dqnSuccessEvalSD, dqnConfidenceEvalSD, dqnExpEvalSD = evaluatePolicy(env, dqnModel, difficulties=wallSize)
-	randomRewardEval, randomSafetyEval, randomSuccessEval, randomConfidenceEval, randomExpEval, randomRewardEvalSD, randomSafetyEvalSD, randomSuccessEvalSD, randomConfidenceEvalSD, randomExpEvalSD = evaluatePolicy(env, difficulties=wallSize)
 
+
+	ppoClasssifier = interTrain(env, model=ppoModel, difficulties=wallSize)
+	dqnClassifier = interTrain(env, model=dqnModel, difficulties=wallSize)
+	randomClassifier=interTrain(env)
+
+	ppoRewardEval, ppoSafetyEval, ppoSuccessEval, ppoConfidenceEval, ppoExpEval, ppoExpectEval, ppoRewardEvalSD, ppoSafetyEvalSD, ppoSuccessEvalSD, ppoConfidenceEvalSD, ppoExpEvalSD, ppoExpectEvalSD = evaluatePolicy(env, ppoModel, difficulties=wallSize, classifier=ppoClasssifier)
+	dqnRewardEval, dqnSafetyEval, dqnSuccessEval, dqnConfidenceEval, dqnExpEval, dqnExpectEval, dqnRewardEvalSD, dqnSafetyEvalSD, dqnSuccessEvalSD, dqnConfidenceEvalSD, dqnExpEvalSD, dqnExpectEvalSD = evaluatePolicy(env, dqnModel, difficulties=wallSize, classifier=dqnClassifier)
+	randomRewardEval, randomSafetyEval, randomSuccessEval, randomConfidenceEval, randomExpEval, randomExpectEval, randomRewardEvalSD, randomSafetyEvalSD, randomSuccessEvalSD, randomConfidenceEvalSD, randomExpEvalSD, randomExpectEvalSD = evaluatePolicy(env, difficulties=wallSize)
+	ppoWRewardEval, ppoWSafetyEval, ppoWSuccessEval, ppoWConfidenceEval, ppoWExpEval, ppoWExpectEval, ppoWRewardEvalSD, ppoWSafetyEvalSD, ppoWSuccessEvalSD, ppoWConfidenceEvalSD, ppoWExpEvalSD, ppoWExpectEvalSD = evaluatePolicy(env, ppoModel, difficulties=wallSize, classifier=ppoClasssifier, activateWrapper=True)
+	dqnWRewardEval, dqnWSafetyEval, dqnWSuccessEval, dqnWConfidenceEval, dqnWExpEval, dqnWExpectEval, dqnWRewardEvalSD, dqnWSafetyEvalSD, dqnWSuccessEvalSD, dqnWConfidenceEvalSD, dqnWExpEvalSD, dqnWExpectEvalSD = evaluatePolicy(env, dqnModel, difficulties=wallSize, classifier=dqnClassifier, activateWrapper=True)
 	difficulties=[1,2,3,4,5,6,7,8,9,10,11,12,13]
 
 	normppoRewardEval = []
@@ -280,8 +345,12 @@ if doEval:
 
 	plt.plot(difficulties, ppoRewardEval, label='ppo')
 	plt.fill_between(difficulties, ppoRewardEval-ppoRewardEvalSD, ppoRewardEval+ppoRewardEvalSD, alpha=0.25)
+	plt.plot(difficulties, ppoWRewardEval, label='ppoWrapped')
+	plt.fill_between(difficulties, ppoWRewardEval-ppoWRewardEvalSD, ppoWRewardEval+ppoWRewardEvalSD, alpha=0.25)
 	plt.plot(difficulties, dqnRewardEval, label='dqn')
 	plt.fill_between(difficulties, dqnRewardEval-dqnRewardEvalSD, dqnRewardEval+dqnRewardEvalSD, alpha=0.25)
+	plt.plot(difficulties, dqnWRewardEval, label='dqnWrapped')
+	plt.fill_between(difficulties, dqnWRewardEval-dqnWRewardEvalSD, dqnWRewardEval+dqnWRewardEvalSD, alpha=0.25)
 	plt.plot(difficulties, randomRewardEval, label='Uniform')
 	plt.fill_between(difficulties, randomRewardEval-randomRewardEvalSD, randomRewardEval+randomRewardEvalSD, alpha=0.25)
 	plt.xlabel("Difficulty")
@@ -290,8 +359,12 @@ if doEval:
 	plt.show()
 	plt.plot(difficulties, ppoSuccessEval, label='ppo')
 	plt.fill_between(difficulties, ppoSuccessEval-ppoSuccessEvalSD, ppoSuccessEval+ppoSuccessEvalSD, alpha=0.25)
+	plt.plot(difficulties, ppoWSuccessEval, label='ppoWrapped')
+	plt.fill_between(difficulties, ppoWSuccessEval-ppoWSuccessEvalSD, ppoWSuccessEval+ppoWSuccessEvalSD, alpha=0.25)
 	plt.plot(difficulties, dqnSuccessEval, label='dqn')
 	plt.fill_between(difficulties, dqnSuccessEval-dqnSuccessEvalSD, dqnSuccessEval+dqnSuccessEvalSD, alpha=0.25)
+	plt.plot(difficulties, dqnWSuccessEval, label='dqnWrapped')
+	plt.fill_between(difficulties, dqnWSuccessEval-dqnWSuccessEvalSD, dqnWSuccessEval+dqnWSuccessEvalSD, alpha=0.25)
 	plt.plot(difficulties, randomSuccessEval, label='Uniform')
 	plt.fill_between(difficulties, randomSuccessEval-randomSuccessEvalSD, randomSuccessEval+randomSuccessEvalSD, alpha=0.25)
 	plt.xlabel("Difficulty")
@@ -300,8 +373,12 @@ if doEval:
 	plt.show()
 	plt.plot(difficulties, ppoSafetyEval, label='ppo')
 	plt.fill_between(difficulties, ppoSafetyEval+ppoSafetyEvalSD, ppoSafetyEval-ppoSafetyEvalSD, alpha=0.25)
+	plt.plot(difficulties, ppoWSafetyEval, label='ppoWrapped')
+	plt.fill_between(difficulties, ppoWSafetyEval+ppoWSafetyEvalSD, ppoWSafetyEval-ppoWSafetyEvalSD, alpha=0.25)
 	plt.plot(difficulties, dqnSafetyEval, label='dqn')
 	plt.fill_between(difficulties, dqnSafetyEval+dqnSafetyEvalSD, dqnSafetyEval-dqnSafetyEvalSD, alpha=0.25)
+	plt.plot(difficulties, dqnWSafetyEval, label='dqnWrapped')
+	plt.fill_between(difficulties, dqnWSafetyEval+dqnWSafetyEvalSD, dqnWSafetyEval-dqnWSafetyEvalSD, alpha=0.25)
 	plt.plot(difficulties, randomSafetyEval, label='Uniform')
 	plt.fill_between(difficulties, randomSafetyEval+randomSafetyEvalSD, randomSafetyEval-randomSafetyEvalSD, alpha=0.25)
 	plt.xlabel("Difficulty")
@@ -328,6 +405,21 @@ if doEval:
 	plt.ylabel("Exploration Rate")
 	plt.legend()
 	plt.show()
+	plt.plot(difficulties, ppoExpectEval, label='ppo')
+	plt.fill_between(difficulties, ppoExpectEval-ppoExpectEvalSD, ppoExpectEval+ppoExpectEvalSD, alpha=0.25)
+	plt.plot(difficulties, dqnExpectEval, label='dqn')
+	plt.fill_between(difficulties, dqnExpectEval-dqnExpectEvalSD, dqnExpectEval+dqnExpectEvalSD, alpha=0.25)
+	plt.xlabel("Difficulty")
+	plt.ylabel("Expected Success")
+	plt.legend()	
+	plt.show()
+
+
+	print(ppoExpectEval)
+	print(ppoExpectEvalSD)
+	print(dqnExpectEval)
+	print(dqnExpectEvalSD)
+	
 
 	with open('/home/john/ai-safety-gridworlds/logs/ppoBase.csv', 'w') as csvFile:
 		csvWriter=csv.writer(csvFile)
