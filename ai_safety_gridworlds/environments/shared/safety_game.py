@@ -101,7 +101,7 @@ class SafetyEnvironment(pycolab_interface.Environment):
                value_mapping=None,
                environment_data=None,
                repainter=None,
-               max_iterations=250):
+               max_iterations=100):
     """Initialize a Python v2 environment for a pycolab game factory.
 
     Args:
